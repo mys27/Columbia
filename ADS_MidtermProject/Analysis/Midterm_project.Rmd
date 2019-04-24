@@ -1,0 +1,498 @@
+---
+title: "Applied Data Science:  Midterm Project"
+author: ""
+date: ""
+output:
+  prettydoc::html_pretty:
+  theme: cayman
+highlight: github
+---
+
+```{r setup, include=FALSE}
+set.seed(72)
+knitr::opts_chunk$set(echo = TRUE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55))
+```
+
+```{r libraries, echo = FALSE}
+library(data.table)
+library(DT)
+library(nnet)
+library(MASS)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(e1071)
+library(class)
+library(caret)
+```
+
+```{r source_files}
+training.file <-"D:/Files/Columbia/1819Term2/5243 ads/midproject/Data/MNIST-fashion training set-49.csv"
+testing.file <- "D:/Files/Columbia/1819Term2/5243 ads/midproject/Data/MNIST-fashion testing set-49.csv"
+```
+
+```{r constants}
+label.name <- "label"
+model.name <- "model"
+
+n.values <- c(1000, 3000, 6000)
+iterations <- 3
+n.model <- iterations * length(n.values)
+
+num.digits <- 4
+
+size_ratio <- 0.25
+time_ratio <- 0.25
+accurate_ratio <- 0.5
+threshold <- 1
+```
+
+```{r functions}
+round.numerics <- function(x, digits){
+  if(is.numeric(x)){
+    x <- round(x = x, digits = digits)
+  }
+  return(x)
+}
+
+
+count_non_num <- function(x){
+  return(sum(is.numeric(x) == 0))
+}
+
+
+sampling <- function(n.values, iterations){
+  sample_names <- NULL
+  for (i in 1:iterations){
+    for (j in 1:iterations){
+      n <- n.values[j]
+      data <- training.set[sample(nrow(training.set), size = n, replace = FALSE),]
+      name <- sprintf("%s_%s_%s", "dat",n,i)
+      assign(name, data, envir = .GlobalEnv)
+      sample_names <- c(sample_names, name)
+    }
+  }
+  return(sample_names)
+}
+
+
+error_rate <- function(training_pred, training_data,
+                       testing_pred, testing_data){
+  
+  training_error <- mean(training_pred != training_data$label)
+  testing_error <- mean(testing_pred != testing_data$label)
+  
+  return(list(training_error = training_error,
+              testing_error = testing_error,
+              training_pred_table = table(training_pred, training_data$label),
+              testing_pred_table = table(testing_pred, testing_data$label)))
+}
+
+get_model_name <- function(FUN){
+  name <- as.character(substitute(FUN))
+  namenew <- strsplit(name, split="_")[[1]][2]
+  return(namenew)
+}
+
+scoring <- function(result, 
+                    size.ratio = size_ratio, 
+                    time.ratio = time_ratio, 
+                    accurate.ratio = accurate_ratio,
+                    t = threshold){
+  a <- result$training_size/nrow_whole_training_data
+  b <- min(as.numeric(result$time), threshold)
+  points <- size_ratio*a + time_ratio*b + accurate_ratio * result$testing_error
+  return(list(A = a,
+              B = b,
+              C = result$testing_error,
+              Points = points))
+  
+}
+
+iteration <- function(FUN){
+  model_name <- strsplit(as.character(substitute(FUN)), split="_")[[1]][2]
+  size = A = B = C = Points = numeric(n.model)
+  count = 0
+  for (traindata_name in sample_names){
+    count <- count + 1
+    traindata <- get(traindata_name)
+    result <- FUN(traindata, testing.set)
+    score <- scoring(result)
+    
+    size[count] <- nrow(traindata)
+    A[count] <- score$A
+    B[count] <- score$B
+    C[count] <- score$C
+    Points[count] <- score$Points
+  }
+  result <- data.table(model = model_name, `Sample Size` = size,
+                       A = A, B = B, C = C, Points=Points)
+  return(result)
+}
+```
+
+
+
+```{r load_data}
+training.set <- fread(training.file)
+testing.set <- fread(testing.file)
+nrow_whole_training_data <- nrow(training.set)
+```
+
+```{r clean_data}
+training.set$label <- factor(training.set$label)
+testing.set$label <- factor(testing.set$label)
+
+summary(training.set$label)
+summary(testing.set$label)
+
+#check the range and if there are non-numerics
+training.set[, lapply(X=.SD, FUN="range"), .SDcols=-(label.name)]
+testing.set[, lapply(X=.SD, FUN="range"), .SDcols=-(label.name)]
+
+```
+
+```{r generate_samples}
+sample_names <- sampling(n.values, iterations)
+```
+
+## Introduction
+
+
+### Model 1: LDA
+
+
+```{r code_model1_development, eval = TRUE}
+my_LDA <- function(traindata, testdata=testing.set){
+  t0 <- Sys.time()
+  fit <- lda(label ~., data=traindata)
+  train.pred <- predict(fit, traindata[,-1])$class
+  test.pred <- predict(fit, testdata[,-1])$class
+  
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+  t1 <- Sys.time()
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table = error$training_pred_table,
+                 testing_error = error$testing_error,
+                 testing_pred_table = error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+  return(result)
+}
+```
+
+```{r load_model1}
+result_LDA <- iteration(my_LDA)
+datatable(result_LDA[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 2: Logistic regression
+
+
+```{r code_model2_development, eval = TRUE}
+my_logistic <- function(traindata, testdata = testing.set){
+  t0 <- Sys.time()
+  fit <- multinom(label ~., traindata, maxit = 1000, trace = FALSE)
+  train.pred <- predict(fit, as.matrix(traindata[,-1]),type="class")
+  test.pred <- predict(fit, as.matrix(testdata[,-1]),type="class")
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+  t1 <- Sys.time()
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table = error$training_pred_table,
+                 testing_error = error$testing_error,
+                 testing_pred_table = error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+  return(result)
+}
+```
+
+```{r load_model2}
+result_logistic <- iteration(my_QDA)
+datatable(result_logistic[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 3: Ridge Regression
+
+
+```{r code_model3_development, eval = TRUE}
+my_RidgeRegression <- function(traindata, testdata=testing.set){
+  t0 <- Sys.time()
+  cv.fit <- cv.glmnet(x=data.matrix(traindata[,-1]), y=traindata$label, 
+                      family="multinomial", type.multinomial="grouped", alpha=0)
+  lambda.opt <- cv.fit$lambda.min
+  fit <- glmnet(x=data.matrix(traindata[,-1]), y=traindata$label, 
+                family="multinomial", type.multinomial="grouped", 
+                alpha=0, lambda=lambda.opt)
+  train.pred <- predict(fit, newx=data.matrix(traindata[,-1]), s=lambda.opt, type="class")
+  test.pred <- predict(fit, newx=data.matrix(testdata[,-1]), s=lambda.opt, type="class")
+  
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+  t1 <- Sys.time()
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table = error$training_pred_table,
+                 testing_error = error$testing_error,
+                 testing_pred_table = error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+  return(result)
+}
+```
+
+```{r load_model3}
+result_RidgeRegression <- iteration(my_RidgeRegression)
+datatable(result_RidgeRegression[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 4: Lasso Regression
+
+
+```{r code_model4_development, eval = TRUE}
+my_LassoRegression <- function(traindata, testdata=testing.set){
+  t0 <- Sys.time()
+  cv.fit <- cv.glmnet(x=data.matrix(traindata[,-1]), y=traindata$label, 
+                      family="multinomial", type.multinomial="grouped", alpha=1)
+  lambda.opt <- cv.fit$lambda.min
+  fit <- glmnet(x=data.matrix(traindata[,-1]), y=traindata$label, 
+                family="multinomial", type.multinomial="grouped", 
+                alpha=1, lambda=lambda.opt)
+  train.pred <- predict(fit, newx=data.matrix(traindata[,-1]), s=lambda.opt, type="class")
+  test.pred <- predict(fit, newx=data.matrix(testdata[,-1]), s=lambda.opt, type="class")
+  
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+  t1 <- Sys.time()
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table = error$training_pred_table,
+                 testing_error = error$testing_error,
+                 testing_pred_table = error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+  return(result)
+}
+```
+
+```{r load_model4}
+result_LassoRegression <- iteration(my_LassoRegression)
+datatable(result_LassoRegression[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 5: Tree
+
+
+```{r code_model5_development, eval = TRUE}
+my_Tree <- function(traindata, testdata = testing.set, plot = F){
+  
+  t0 <- Sys.time()
+  
+  raw_fit <- rpart(label~., data = traindata)
+  best_cp <- raw_fit$cptable[which.min(raw_fit$cptable[,"xerror"]),"CP"]
+  fit <- prune(raw_fit, cp = best_cp)
+  train.pred <- predict(fit, traindata[, -1], type = 'class')
+  test.pred <- predict(fit, testdata, type = 'class')
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+  
+  t1 <- Sys.time()
+  
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table = error$training_pred_table,
+                 testing_error = error$testing_error,
+                 testing_pred_table = error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+  
+  #if (plot == T){
+   # rpart.plot(fit, uniform = T, branch=1, type=2, extra=102, shadow.col="gray",
+    #           border.col="blue", split.cex=1.2,
+     #          main = "Classification Tree")
+  #}
+  
+  return(result)
+}
+```
+
+```{r load_model5}
+result_Tree <- iteration(my_Tree)
+datatable(result_Tree[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 6: Random Forest
+
+
+```{r code_model6_development, eval = TRUE}
+my_RandomForest <- function(traindata, testdata = testing.set, plot = F){
+  
+  t0 <- Sys.time()
+  
+  fit <- randomForest(label~., data=traindata, ntree = 800, proximity=TRUE)
+  train.pred <- predict(fit, traindata[, -1], type = 'class')
+  test.pred <- predict(fit, testdata, type = 'class')
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+
+  t1 <- Sys.time()
+  
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table = error$training_pred_table,
+                 testing_error = error$testing_error,
+                 testing_pred_table = error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+  
+  return(result)
+}
+```
+
+```{r load_model6}
+result_RandomForest <- iteration(my_RandomForest)
+datatable(result_RandomForest[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 7: SVM
+
+```{r code_model7_development, eval = TRUE}
+my_SVM <- function(traindata,testdata = testing.set){
+  t0 <- Sys.time()
+  fit <- svm(label ~., traindata)
+  train.pred <- predict(fit, as.matrix(traindata[,-1]),type="class")
+  test.pred <- predict(fit, as.matrix(testdata[,-1]),type="class")
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+  t1 <- Sys.time()
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table = error$training_pred_table,
+                 testing_error = error$testing_error,
+                 testing_pred_table=error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+}
+```
+
+```{r load_model7}
+result_SVM <- iteration(my_SVM)
+datatable(result_SVM[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 8: KNN with k=10
+```{r code_model8_development, eval = TRUE}
+my_KNN10 <- function(traindata, testdata = testing.set){
+  t0 <- Sys.time()
+  k <- 10
+  train.pred <-knn(traindata[,-1], traindata[,-1], cl=traindata$label, k=k)
+  test.pred <- knn(traindata[,-1], testdata[,-1], cl=traindata$label, k=k)
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+  t1 <- Sys.time()
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table=error$training_pred_table,
+                 testing_error=error$testing_error,
+                 testing_pred_table=error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+  return(result)
+}
+```
+
+```{r load_model8}
+result_KNN10 <- iteration(my_KNN10)
+datatable(result_KNN10[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 9: KNN with k=5
+
+
+```{r code_model9_development, eval = TRUE}
+my_KNN5 <- function(traindata, testdata = testing.set){
+  t0 <- Sys.time()
+  k <- 5
+  train.pred <-knn(traindata[,-1], traindata[,-1], cl=traindata$label, k=k)
+  test.pred <- knn(traindata[,-1], testdata[,-1], cl=traindata$label, k=k)
+  error <- error_rate(train.pred, traindata, test.pred, testdata)
+  t1 <- Sys.time()
+  result <- list(training_size = nrow(traindata),
+                 training_error = error$training_error,
+                 training_pred_table=error$training_pred_table,
+                 testing_error=error$testing_error,
+                 testing_pred_table=error$testing_pred_table,
+                 testing_pred = test.pred,
+                 time=(t1-t0)/60)
+  return(result)
+}
+```
+
+```{r load_model9}
+result_KNN5 <- iteration(my_KNN5)
+datatable(result_KNN5[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+### Model 10: Boosting
+
+
+```{r code_model10_development, eval = TRUE}
+my_boosting <- function(training_data,testing_data = testing.set){
+  
+  t0 <- Sys.time()
+  lable_frame <- matrix(0, ncol = nrow(testing_data), nrow = 9)
+  time_vecter <- numeric(9)
+  
+  model_knn <- my_KNN(training_data,testing_data)
+  lable_frame[1, ] <- model_knn$testing_pred
+  
+  model_svm <- my_SVM(training_data,testing_data)
+  lable_frame[2, ] <- model_svm$testing_pred
+  
+  model_logistic <- my_logistic(training_data , testing_data)
+  lable_frame[3, ] <- model_logistic$testing_pred
+  
+  model_lasso <- my_LassoRegression(training_data, testing_data)
+  lable_frame[4, ] <- model_lasso$testing_pred
+  
+  model_ridge <- my_RidgeRegression(training_data, testing_data)
+  lable_frame[5, ] <- model_ridge$testing_pred
+  
+  model_lda <- my_LDA(training_data, testing_data)
+  lable_frame[6, ] <- model_lda$testing_pred
+  
+  model_qda <- my_QDA(training_data, testing_data)
+  lable_frame[7, ] <- model_qda$testing_pred
+ 
+  model_tree <- my_Tres(training_data, testing_data)
+  lable_frame[8, ] <- model_tree$testing_pred
+  
+  model_randomforest <- my_RandomForest(training_data, testing_data)
+  lable_frame[9, ] <- model_randomforest$testing_pred
+  
+  t1 <- Sys.time()
+  
+  return(lable_frame)
+}
+```
+
+```{r load_model10}
+result_boosting <- iteration(my_boosting)
+datatable(result_boosting[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+## Scoreboard
+
+```{r scoreboard}
+result_bind <- rbind(result_LassoRegression,result_RidgeRegression, result_logistic,
+                     result_LDA, result_SVM, result_KNN5, result_KNN10,
+                     result_Tree, result_RandomForest)
+datatable(result_bind[, lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+
+result_bind_summary <- result_bind[, lapply(X=.SD, FUN="mean"), by=c("model", "Sample Size")]
+datatable(result_bind_summary[order(Point), lapply(X=.SD, FUN="round.numerics", digits=num.digits)])
+```
+
+## Discussion
+
+
+## References
+
+
