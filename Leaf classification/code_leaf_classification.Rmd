@@ -1,0 +1,542 @@
+---
+title: "6690_project_leaf_classification"
+output: html_document
+---
+```{r setup}
+knitr::opts_knit$set(root.dir = "D:/Files/Columbia/1819Term1/EECS_E6690/Project/100 leaves plant species")
+```
+
+## read in data, remove missing values
+```{r}
+mar <- read.table("data_Mar_64.txt", header=F, sep=",")
+sha <- read.table("data_Sha_64.txt", header=F, sep=",")
+tex <- read.table("data_Tex_64.txt", header=F, sep=",")
+
+
+mar <- data.frame(ind=1:dim(mar)[1], mar)
+sha <- data.frame(ind=1:dim(sha)[1], sha)
+tex <- data.frame(ind=1:dim(tex)[1], tex)
+mar <- mar[order(mar$V1, mar$ind), -1]
+sha <- sha[order(sha$V1, sha$ind), -1]
+tex <- tex[order(tex$V1, tex$ind), -1]
+
+dim(mar)
+dim(sha)
+dim(tex)
+
+write.table(mar, "mar.txt", sep=",", row.names = FALSE, col.names = FALSE, quote=FALSE)
+write.table(sha, "sha.txt", sep=",", row.names = FALSE, col.names = FALSE, quote=FALSE)
+write.table(tex, "tex.txt", sep=",", row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+
+dim(mar)
+```
+
+## KNN (k=3)
+```{r}
+library(class)
+library(kknn)
+set.seed(6690)
+
+acc = ell = matrix(rep(NA, 7*16), nrow=7)
+rownames(acc) <- c("mar", "sha", "tex", "mar+sha", "mar+tex", "sha+tex", "mar+sha+tex")
+rownames(ell) <- c("mar", "sha", "tex", "mar+sha", "mar+tex", "sha+tex", "mar+sha+tex")
+
+scale.prob <- function(prob){
+  for (i in 1:dim(prob)[1]){
+    prob[i, ] <- prob[i, ]/apply(prob, 1, sum)[i]
+  }
+  return(prob)
+}
+
+ell.comp <- function(prob, truth){
+  prob.true <- NULL
+  prob <- scale.prob(prob)
+  for (i in 1:99){
+    prob.true[i] <- prob[i, which(colnames(prob)==truth[i])]
+  }
+  return(mean(log(prob.true)))
+}
+
+t <- 0.01
+
+knn.leaf <- function(train.size, weight=FALSE, k.knn=3){
+  kernal.leaf <- ifelse(weight == FALSE, "rectangular", "optimal")
+  
+  for (i in 1:16){
+    
+    test.ind <- seq(i, 1584, by=16)
+    train.ind = ind = sort(sample((1:16)[-i], size=train.size, replace=FALSE))
+    
+    for (j in 1:98){
+      train.ind <- c(train.ind, ind + j*16)
+    }
+
+    test.mar <- mar[test.ind, ]
+    train.mar <- mar[train.ind, ]
+    
+    truth <- (test.mar$V1)
+    
+    knn.w.mar <- kknn(V1~., train.mar, test.mar, k=k.knn, kernel=kernal.leaf)
+    test.prob.w.mar <- knn.w.mar$prob
+    test.pred.w.mar <- knn.w.mar$fitted.values
+    test.prob.w.mar <- test.prob.w.mar*(1-t)+t/99
+    test.prob <- test.prob.w.mar
+    test.pred <- colnames(test.prob.w.mar)[apply(test.prob, 1, which.max)]
+    acc[1, i] <- sum(test.pred == test.mar$V1)/99
+    ell[1, i] <- ell.comp(test.prob, truth) 
+    
+    test.sha <- sha[test.ind, ]
+    train.sha <- sha[train.ind, ]
+    knn.w.sha <- kknn(V1~., train.sha, test.sha, k=k.knn, kernel=kernal.leaf)
+    test.prob.w.sha <- knn.w.sha$prob
+    test.pred.w.sha <- knn.w.sha$fitted.values
+    test.prob.w.sha <- test.prob.w.sha*(1-t)+t/99
+    
+    test.prob <- test.prob.w.sha
+    test.pred <- colnames(test.prob.w.mar)[apply(test.prob, 1, which.max)]
+    acc[2, i] <- sum(test.pred == test.mar$V1)/99
+    ell[2, i] <- ell.comp(test.prob, truth)
+    
+    test.tex <- tex[test.ind, ]
+    train.tex <- tex[train.ind, ]
+    knn.w.tex <- kknn(V1~., train.tex, test.tex, k=k.knn, kernel=kernal.leaf)
+    test.prob.w.tex <- knn.w.tex$prob
+    test.pred.w.tex <- knn.w.tex$fitted.values
+    test.prob.w.tex <- test.prob.w.tex*(1-t)+t/99
+    test.prob <- test.prob.w.tex
+    test.pred <- colnames(test.prob.w.mar)[apply(test.prob, 1, which.max)]
+    acc[3, i] <- sum(test.pred == test.mar$V1)/99
+    ell[3, i] <- ell.comp(test.prob, truth)
+    
+    test.prob <- test.prob.w.mar * test.prob.w.sha
+    test.pred <- colnames(test.prob.w.mar)[apply(test.prob, 1, which.max)]
+    acc[4, i] <- sum(test.pred == test.mar$V1)/99
+    ell[4, i] <- ell.comp(test.prob, truth)
+    
+    test.prob <- test.prob.w.mar * test.prob.w.tex
+    test.pred <- colnames(test.prob.w.mar)[apply(test.prob, 1, which.max)]
+    acc[5, i] <- sum(test.pred == test.mar$V1)/99
+    ell[5, i] <- ell.comp(test.prob, truth)
+    
+    test.prob <- test.prob.w.sha * test.prob.w.tex
+    test.pred <- colnames(test.prob.w.mar)[apply(test.prob, 1, which.max)]
+    acc[6, i] <- sum(test.pred == test.mar$V1)/99
+    ell[6, i] <- ell.comp(test.prob, truth)
+    
+    test.prob <- test.prob.w.mar * test.prob.w.sha * test.prob.w.tex
+    test.pred <- colnames(test.prob.w.mar)[apply(test.prob, 1, which.max)]
+    acc[7, i] <- sum(test.pred == test.mar$V1)/99
+    ell[7, i] <- ell.comp(test.prob, truth)
+  }
+  
+  return(data.frame(ACC=apply(acc, 1, mean),ELL=apply(ell, 1, mean)))
+}
+
+acc.high <- NULL
+ell.high <- NULL
+train.15   <- knn.leaf(15, weight=FALSE, k.knn=3)
+trian.15.w <- knn.leaf(15, weight=TRUE, k.knn=3)
+
+for (n in 1:15){
+  acc.high[n] <- max(knn.leaf(train.size=n, weight=FALSE)$ACC)
+  ell.high[n] <- max(knn.leaf(train.size=n, weight=FALSE)$ELL)
+}
+
+knn.leaf(train.size=15, weight=FALSE)$ELL
+
+library(ggplot2)
+ggplot(data=data.frame(train.size=1:15, ACC=acc.high))+
+  geom_line(mapping = aes(x=train.size, y=ACC), color="red", size=1.5) +
+  geom_point(mapping = aes(x=train.size, y=ACC), size=1.5) +
+  
+  labs(title="ACC vs Training size")
+  
+ 
+ggplot(data=data.frame(train.size=1:15, ELL=ell.high))+
+  geom_line(mapping = aes(x=train.size, y=ELL), color="blue", size=1.5) +
+  geom_point(mapping = aes(x=train.size, y=ELL), size=1.5) +
+  labs(title="ELL vs Training size")
+    
+
+```
+
+
+## 1 vs others relabel
+```{r}
+label <- matrix(rep(0, 1584*99), nrow=1584)
+name <- NULL
+for (i in 1:99){
+  name[i] <- paste("T", i, sep="")
+  label[(1+16*(i-1)):(16*i),i] <- 1
+}
+
+write.table(label, "label.txt", sep=" ", row.names = FALSE, col.names = TRUE, quote=FALSE)
+label <- read.table("label.txt", header=T)
+
+for (i in 1:99){
+  label[,i] <- as.factor(label[,i])
+}
+```
+
+
+## Tree (combine 3 features)
+```{r}
+library(tree)
+
+acc <- rep(NA, 16)
+
+for(i in 1:16){  #for LOOCV
+  
+  test.ind <- seq(i, 1584, by=16)
+  comb.pred <- matrix(rep(NA, 99*99), nrow=99)
+  
+  for (j in 1:99){   #training 99 1 vs others
+  
+    comb.data <- data.frame(label=label[,j], sha[,-1], tex[,-1]) #, sha[,-1], tex[,-1])
+
+    test.comb  <- comb.data[test.ind, ]
+    train.comb <- comb.data[-test.ind, ]
+
+    comb.tree <- tree(formula=label ~ ., data=comb.data)
+    comb.pred[,j] <- predict(comb.tree, test.comb[,-1], type="class")
+
+  }
+  
+  test.pred <- apply(comb.pred, 1, which.max)
+  acc[i] <- sum(test.pred == (1:99))/99
+
+}
+
+mean(acc)
+
+```
+
+## SVM
+
+```{r}
+comb.data <- data.frame(mar, sha[,-1], tex[,-1])
+
+acc.list <- NULL
+
+for (i in 1:16){
+idxs <- seq(i, dim(mar)[1], by=16)
+train.data <- tex[-idxs,]
+test.data <- tex[idxs,]
+
+svm.model <- svm(formula=V1~., data=train.data, kernel="linear")
+res <- predict(object=svm.model, newdata=test.data, type="class")
+a <- sum(res == test.mar$V1)
+acc.list[i] = a
+
+}
+
+mean(acc.list/99)
+```
+
+## Neural Network
+
+```{python}
+import pandas as pd
+import dynet
+import numpy as np
+import random
+
+
+mar_file = "data/mar.txt"
+sha_file = "data/sha.txt"
+tex_file = "data/tex.txt"
+
+mar = pd.read_csv(mar_file, header=None)
+sha = pd.read_csv(sha_file, header=None)
+tex = pd.read_csv(tex_file, header=None)
+
+species = list(set(mar[0]))
+species_dic = dict()
+for id, name in enumerate(species):
+    species_dic[name] = id
+    
+model = dynet.Model()
+updater = dynet.AdamTrainer(model)
+
+transfer = dynet.rectify
+input_dim = 64*3
+hidden_dim1 = 180
+hidden_dim2 = 180
+minibatch_size = 200
+
+hidden_layer1 = model.add_parameters((hidden_dim1, input_dim))
+hidden_layer_bias1 = model.add_parameters(hidden_dim1, init=dynet.ConstInitializer(0.2))
+
+hidden_layer2 = model.add_parameters((hidden_dim2, hidden_dim1))
+hidden_layer_bias2 = model.add_parameters(hidden_dim2, init=dynet.ConstInitializer(0.2))
+
+output_layer = model.add_parameters((len(species), hidden_dim2))
+output_bias = model.add_parameters(len(species), init=dynet.ConstInitializer(0))
+
+def forward(features):
+    input_layer = dynet.inputTensor(features)
+    
+    hidden1 = transfer(hidden_layer1 * input_layer + hidden_layer_bias1)
+    hidden2 = transfer(hidden_layer2 * hidden1 + hidden_layer_bias2)
+    output = output_layer * hidden2 + output_bias
+    
+    return output
+    
+   
+mar_data = open(mar_file).read().strip().split("\n")
+mar_data = pd.DataFrame(mar_data)
+
+sha_data = open(sha_file).read().strip().split("\n")
+sha_data = pd.DataFrame(sha_data)
+
+tex_data = open(tex_file).read().strip().split("\n")
+tex_data = pd.DataFrame(tex_data)
+
+mar_data[0] = mar_data[0].astype(str) + "," + sha_data[0].astype(str) + "," + tex_data[0].astype(str) 
+data = mar_data
+
+idxs = [16*i for i in range(99)]
+train_data = data.loc[~mar.index.isin(idxs)]
+test_data = data.loc[mar.index.isin(idxs)]
+
+train_data = list(train_data[0])
+test_data = list(test_data[0])
+
+
+def train_iter(train_data):
+    losses = []
+    random.shuffle(train_data)
+    
+    for line in train_data:
+        fields = line.strip().split(",")
+        label, gold_label, features = fields[0], species_dic[fields[0]], fields[1:65] + fields[66:130] + fields[131:]
+        features = [float(i) for i in features]
+        result = forward(features)
+        
+        loss = dynet.pickneglogsoftmax(result, gold_label)
+        losses.append(loss)
+        
+        if len(losses) >= minibatch_size:
+            minibatch_loss = dynet.esum(losses) / len(losses)
+            minibatch_loss.forward()
+            minibatch_loss_value = minibatch_loss.value()
+            
+            minibatch_loss.backward()
+            updater.update()
+            
+            losses = []
+            dynet.renew_cg()
+            
+    dynet.renew_cg()
+    
+    
+def load(filename):
+    model.populate(filename)
+    
+    
+def save(filename):
+    model.save(filename)
+    
+    
+for i in range(1000):
+    print("epoch", (i+1))
+    train_iter(train_data)
+    dynet.renew_cg()
+print("finished training!")
+
+
+class DepModel:
+    def __init__(self):
+        self.species = species
+    
+    def score(self, str_features):
+        output = forward(str_features)
+        scores = output.npvalue()
+        dynet.renew_cg()
+        return scores
+        
+        
+abcd = DepModel()
+gold = []
+pred = []
+num = 0
+
+for sample in test_data:
+    fields = sample.strip().split(",")
+    label, gold_label, features = fields[0], species_dic[fields[0]], fields[1:65] + fields[66:130] + fields[131:]
+    features = [float(i) for i in features]
+    gold.append(gold_label)
+    res = abcd.score(features)
+    pre = np.argmax(res)
+    pred.append(pre)
+    if pre == gold_label:
+        num += 1
+        
+print(num/99)
+```
+
+
+
+## Attepmpts
+## Logistic regression * PCA
+```{r}
+## model 3 features independently: product of probability
+## others: add a small value to make it greater than 0
+
+pca.mar <- princomp(mar[,-1])
+pca.sha <- princomp(sha[,-1])
+pca.tex <- princomp(tex[,-1])
+#reserve 80% of information
+summary(pca.mar)  #8
+summary(pca.sha)  #2
+summary(pca.tex)  #16
+
+mar.new <- pca.mar$scores[,1:8]
+sha.new <- pca.sha$scores[,1:2]
+tex.new <- pca.tex$scores[,1:16]
+
+
+
+
+acc <- rep(NA, 16)
+
+for(i in 1:1){  #for LOOCV
+  
+  test.ind <- seq(i, 1584, by=16)
+  test.prob.mar   = test.prob.sha   = test.prob.tex   = matrix(NA, nrow=99, ncol=99)
+  test.prob.mar.f = test.prob.sha.f = test.prob.tex.f = matrix(1,  nrow=99, ncol=99)
+
+  
+  for (j in 1:99){   #training 99 1 vs others
+  
+    mar.data <- data.frame(label=label[,j], mar.new)
+    sha.data <- data.frame(label=label[,j], sha.new)
+    tex.data <- data.frame(label=label[,j], tex.new)
+
+    test.mar  <- mar.data[test.ind, ]
+    train.mar <- mar.data[-test.ind, ]
+    test.sha  <- sha.data[test.ind, ]
+    train.sha <- sha.data[-test.ind, ]
+    test.tex  <- tex.data[test.ind, ]
+    train.tex <- tex.data[-test.ind, ]
+    
+    ## mar
+    mar.lr <- glm(formula = label ~ ., data=train.mar, family=binomial)
+    prob.mar <- predict(mar.lr, newx = mar.new[test.ind, ], type="response")
+    test.prob.mar[, j] <- prob.mar
+    
+    ## sha
+    cv.lasso.sha <- cv.glmnet(x=data.matrix(train.sha[,-1]), y=train.sha$label, 
+                          alpha = 1, family = "binomial")
+    model.sha <- glmnet(x=data.matrix(train.sha[,-1]), y=train.sha$label, alpha=1, 
+                    family = "binomial", lambda = cv.lasso.sha$lambda.min)
+    x.test.sha <- model.matrix(label ~., test.sha)[,-1]
+    prob.sha <- model.sha %>% predict(newx = x.test.sha, type="response")
+    test.prob.sha[, j] <- prob.sha
+    
+    ## tex
+#    cv.lasso.tex <- cv.glmnet(x=data.matrix(train.tex[,-1]), y=train.tex$label, 
+#                          alpha = 1, family = "binomial")
+#    model.tex <- glmnet(x=data.matrix(train.tex[,-1]), y=train.tex$label, alpha=1, 
+#                    family = "binomial", lambda = cv.lasso.tex$lambda.min)
+#    x.test.tex <- model.matrix(label ~., test.tex)[,-1]
+#    prob.tex <- model.tex %>% predict(newx = x.test.tex, type="response")
+#    test.prob.tex[, j] <- prob.tex
+
+    for (k in 1:99){
+      test.prob.mar[k, -j] <- (1-prob.mar[k])/98   
+      test.prob.sha[k, -j] <- (1-prob.sha[k])/98 
+#      test.prob.tex[k, -j] <- (1-prob.tex[k])/98 
+      }
+    
+    test.prob.mar.f <- test.prob.mar.f * test.prob.mar
+    test.prob.sha.f <- test.prob.sha.f * test.prob.sha
+#    test.prob.tex.f <- test.prob.tex.f * test.prob.tex
+
+  }
+  test.prob <- test.prob.mar.f * test.prob.sha.f #* test.prob.tex.f
+  test.prob <- apply(test.prob, 1, scale.prob)
+  test.pred <- apply(test.prob, 1, which.max)
+  acc[i] <- sum(test.pred == (1:99))/99
+
+}
+
+mean(acc)
+```
+
+
+## Logistic regression * LASSO
+```{r}
+library(tidyverse)
+library(glmnet)
+
+acc <- rep(NA, 16)
+
+for(i in 1:1){  #for LOOCV
+  
+  test.ind <- seq(i, 1584, by=16)
+  test.prob.mar   = test.prob.sha   = test.prob.tex   = matrix(NA, nrow=99, ncol=99)
+  test.prob.mar.f = test.prob.sha.f = test.prob.tex.f = matrix(1,  nrow=99, ncol=99)
+
+  
+  for (j in 1:99){   #training 99 1 vs others
+  
+    mar.data <- data.frame(label=label[,j], mar[,-1])
+    sha.data <- data.frame(label=label[,j], sha[,-1])
+    tex.data <- data.frame(label=label[,j], tex[,-1])
+
+    test.mar  <- mar.data[test.ind, ]
+    train.mar <- mar.data[-test.ind, ]
+    test.sha  <- sha.data[test.ind, ]
+    train.sha <- sha.data[-test.ind, ]
+    test.tex  <- tex.data[test.ind, ]
+    train.tex <- tex.data[-test.ind, ]
+    
+    ## mar
+    cv.lasso.mar <- cv.glmnet(x=data.matrix(train.mar[,-1]), y=train.mar$label, 
+                          alpha = 1, family = "binomial")
+    model.mar <- glmnet(x=data.matrix(train.mar[,-1]), y=train.mar$label, alpha=1, 
+                    family = "binomial", lambda = cv.lasso.mar$lambda.min)
+    x.test.mar <- model.matrix(label ~., test.mar)[,-1]
+    prob.mar <- model.mar %>% predict(newx = x.test.mar, type="response")
+    test.prob.mar[, j] <- prob.mar
+    
+    ## sha
+    cv.lasso.sha <- cv.glmnet(x=data.matrix(train.sha[,-1]), y=train.sha$label, 
+                          alpha = 1, family = "binomial")
+    model.sha <- glmnet(x=data.matrix(train.sha[,-1]), y=train.sha$label, alpha=1, 
+                    family = "binomial", lambda = cv.lasso.sha$lambda.min)
+    x.test.sha <- model.matrix(label ~., test.sha)[,-1]
+    prob.sha <- model.sha %>% predict(newx = x.test.sha, type="response")
+    test.prob.sha[, j] <- prob.sha
+    
+    ## tex
+#    cv.lasso.tex <- cv.glmnet(x=data.matrix(train.tex[,-1]), y=train.tex$label, 
+#                          alpha = 1, family = "binomial")
+#    model.tex <- glmnet(x=data.matrix(train.tex[,-1]), y=train.tex$label, alpha=1, 
+#                    family = "binomial", lambda = cv.lasso.tex$lambda.min)
+#    x.test.tex <- model.matrix(label ~., test.tex)[,-1]
+#    prob.tex <- model.tex %>% predict(newx = x.test.tex, type="response")
+#    test.prob.tex[, j] <- prob.tex
+
+    for (k in 1:99){
+      test.prob.mar[k, -j] <- (1-prob.mar[k])/98   
+      test.prob.sha[k, -j] <- (1-prob.sha[k])/98 
+#      test.prob.tex[k, -j] <- (1-prob.tex[k])/98 
+      }
+    
+    test.prob.mar.f <- test.prob.mar.f * test.prob.mar
+    test.prob.sha.f <- test.prob.sha.f * test.prob.sha
+#    test.prob.tex.f <- test.prob.tex.f * test.prob.tex
+
+  }
+  test.prob <- test.prob.mar.f * test.prob.sha.f #* test.prob.tex.f
+  test.prob <- apply(test.prob, 1, scale.prob)
+  test.pred <- apply(test.prob, 1, which.max)
+  acc[i] <- sum(test.pred == (1:99))/99
+
+}
+
+mean(acc)
+```
